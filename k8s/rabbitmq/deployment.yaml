@@ -14,7 +14,6 @@ spec:
       labels:
         app: rabbitmq
     spec:
-      serviceAccountName: sock-shop-data
       containers:
         - name: rabbitmq
           # Stock public image -- not built from any of our submodules.

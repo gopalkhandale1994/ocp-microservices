@@ -6,12 +6,12 @@ ENV	SERVICE_USER=myuser \
 	SERVICE_GID=10001
 
 RUN	addgroup -g ${SERVICE_GID} ${SERVICE_GROUP} && \
-	adduser -g "${SERVICE_NAME} user" -D -H -G ${SERVICE_GROUP} -s /sbin/nologin -u ${SERVICE_UID} ${SERVICE_USER} && \
-	apk add --update libcap && \
-	mkdir /lib64 && \
-	ln -s /usr/lib/jvm/java-1.8-openjdk/jre/lib/amd64/server/libjvm.so /lib/libjvm.so && \
-	ln -s /usr/lib/jvm/java-1.8-openjdk/lib/amd64/jli/libjli.so /lib/libjli.so && \
-	setcap 'cap_net_bind_service=+ep' $(readlink -f $(which java))
+	adduser -g "${SERVICE_NAME} user" -D -H -G ${SERVICE_GROUP} -s /sbin/nologin -u ${SERVICE_UID} ${SERVICE_USER}
+# No setcap/libcap here: this used to grant java cap_net_bind_service so it
+# could bind privileged port 80 as non-root. We now bind on 8080 instead (see
+# the k8s Deployment's command override), so it's unneeded -- and actively
+# harmful, since OpenShift's no_new_privs enforcement blocks execution of any
+# binary carrying a file capability, which made java fail to exec at all.
 
 WORKDIR /usr/src/app
 COPY ./target/*.jar ./app.jar

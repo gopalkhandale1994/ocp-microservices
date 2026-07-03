@@ -36,6 +36,7 @@ jobs:
             maven_dir: services/carts
             dockerfile: docker/carts/Dockerfile
             build_tool: maven
+            pom_override: docker/carts/pom.xml
           - name: orders
             # context is .../target, not the repo root: orders' Dockerfile does
             # "COPY *.jar" (not "./target/*.jar"), expecting the jar directly
@@ -83,6 +84,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '8'
+
+      - name: Apply pom.xml override
+        if: matrix.pom_override != ''
+        # carts' real pom.xml lives in a read-only submodule we can't push
+        # fixes to, so the corrected copy lives in our own repo instead and
+        # gets spliced in here before the Maven build runs.
+        run: cp ${{ matrix.pom_override }} ${{ matrix.maven_dir }}/pom.xml
 
       - name: Build jar with Maven
         if: matrix.build_tool == 'maven'

@@ -14,12 +14,20 @@ spec:
       labels:
         app: orders-db
     spec:
-      serviceAccountName: sock-shop-data
       containers:
         - name: orders-db
           # Stock public image -- not built from any of our submodules.
-          image: mongo:4.4
+          # Using bitnami/mongodb, not library/mongo: this Sandbox cluster
+          # transparently rewrites all "mongo" pulls through an internal
+          # mirror that 403s with bad credentials (confirmed same failure
+          # across mongo:4.4/5.0/6.0) -- outside our control from this
+          # namespace. bitnami/mongodb isn't subject to that rewrite, and is
+          # also built to run under an arbitrary UID, so no anyuid SCC needed.
+          image: bitnami/mongodb:latest
           imagePullPolicy: IfNotPresent
+          env:
+            - name: ALLOW_EMPTY_PASSWORD
+              value: "yes"
           ports:
             - containerPort: 27017
           readinessProbe:

@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: orders
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-orders:0.1.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-orders:0.2.0
           imagePullPolicy: IfNotPresent
           # Original ENTRYPOINT binds privileged port 80 via the base image's
           # java.sh wrapper. Override to 8082 (orders' own application.properties

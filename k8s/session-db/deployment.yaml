@@ -14,7 +14,6 @@ spec:
       labels:
         app: session-db
     spec:
-      serviceAccountName: sock-shop-data
       containers:
         - name: session-db
           # Stock public image. front-end's config.js hardcodes this Redis
