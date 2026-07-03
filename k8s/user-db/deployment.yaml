@@ -14,6 +14,10 @@ spec:
       labels:
         app: user-db
     spec:
+      # No fsGroup specified: this namespace's restricted-v2 SCC only allows
+      # fsGroup values from its own pre-allocated range, and rejects an
+      # arbitrary one like 1000. Omitting it lets OpenShift auto-assign a
+      # valid value from that range, same as it does for the container UID.
       containers:
         - name: user-db
           # Stock public image, unseeded. The original Sock Shop demo used a
@@ -23,17 +27,18 @@ spec:
           # register your own test users through the app instead of having
           # demo accounts available out of the box.
           #
-          # Using bitnami/mongodb, not library/mongo: this Sandbox cluster
-          # transparently rewrites all "mongo" pulls through an internal
-          # mirror that 403s with bad credentials (confirmed same failure
-          # across mongo:4.4/5.0/6.0) -- outside our control from this
-          # namespace. bitnami/mongodb isn't subject to that rewrite, and is
-          # also built to run under an arbitrary UID, so no anyuid SCC needed.
-          image: bitnami/mongodb:latest
+          # Using MongoDB Inc's own quay.io image, not bitnami or library/mongo:
+          # library/mongo (any tag) is blocked by this Sandbox's internal pull
+          # mirror (403/bad credentials, confirmed across several tags), and
+          # bitnami's free-tier catalog no longer publishes any version but
+          # :latest (MongoDB 8.x) -- which `user`'s ~2017-era Go mgo driver
+          # can't handshake with. This quay.io image still offers real pinned
+          # older versions and isn't subject to the mirror rewrite.
+          image: quay.io/mongodb/mongodb-community-server:4.4.29-ubi8
           imagePullPolicy: IfNotPresent
-          env:
-            - name: ALLOW_EMPTY_PASSWORD
-              value: "yes"
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
           ports:
             - containerPort: 27017
           readinessProbe:
@@ -53,3 +58,6 @@ spec:
             limits:
               cpu: 500m
               memory: 1Gi
+      volumes:
+        - name: data
+          emptyDir: {}

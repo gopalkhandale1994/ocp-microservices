@@ -41,13 +41,14 @@ spec:
           readinessProbe:
             tcpSocket:
               port: 8080
-            initialDelaySeconds: 60
+            initialDelaySeconds: 100
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
               port: 8080
-            initialDelaySeconds: 90
+            initialDelaySeconds: 180
             periodSeconds: 20
+            failureThreshold: 5
           resources:
             requests:
               cpu: 100m
