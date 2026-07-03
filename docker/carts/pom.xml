@@ -35,7 +35,7 @@
         <!-- spring-cloud-starter-zipkin:1.1.0.RELEASE removed: it predates
              Spring Boot 2.0 and its SpringApplicationBuilder API, causing a
              hard NoSuchMethodError at startup. application.properties already
-             sets spring.zipkin.enabled=false, so tracing was never active --
+             sets spring.zipkin.enabled=false, so tracing was never active;
              this dependency was dead weight even when it worked. -->
         <dependency>
             <groupId>io.prometheus</groupId>
