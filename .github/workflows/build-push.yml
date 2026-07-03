@@ -18,6 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: front-end
@@ -27,17 +28,20 @@ jobs:
             context: services/catalogue
             dockerfile: services/catalogue/docker/catalogue/Dockerfile
           - name: catalogue-db
-            context: services/catalogue
+            context: services/catalogue/docker/catalogue-db
             dockerfile: services/catalogue/docker/catalogue-db/Dockerfile
           - name: carts
             context: services/carts
-            dockerfile: services/carts/Dockerfile
+            dockerfile: docker/carts/Dockerfile
+            build_tool: maven
           - name: orders
             context: services/orders
             dockerfile: services/orders/docker/orders/Dockerfile
+            build_tool: maven
           - name: shipping
             context: services/shipping
             dockerfile: services/shipping/docker/shipping/Dockerfile
+            build_tool: maven
           - name: payment
             context: services/payment
             dockerfile: services/payment/docker/payment/Dockerfile
@@ -46,7 +50,8 @@ jobs:
             dockerfile: services/user/Dockerfile
           - name: queue-master
             context: services/queue-master
-            dockerfile: services/queue-master/Dockerfile
+            dockerfile: docker/queue-master/Dockerfile
+            build_tool: maven
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -61,6 +66,17 @@ jobs:
           else
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set up JDK 8
+        if: matrix.build_tool == 'maven'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Build jar with Maven
+        if: matrix.build_tool == 'maven'
+        run: mvn -f ${{ matrix.context }}/pom.xml package -DskipTests
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
