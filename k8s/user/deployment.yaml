@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: user
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-user:0.3.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-user:0.4.0
           imagePullPolicy: IfNotPresent
           # user's mongodb client reads MONGO_HOST from the environment with no
           # built-in default (unlike carts/orders), so it must be set explicitly.
@@ -29,13 +29,13 @@ spec:
             httpGet:
               path: /health
               port: 8084
-            initialDelaySeconds: 5
+            initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8084
-            initialDelaySeconds: 15
+            initialDelaySeconds: 45
             periodSeconds: 20
           resources:
             requests:
@@ -43,4 +43,4 @@ spec:
               memory: 64Mi
             limits:
               cpu: 200m
-              memory: 128Mi
+              memory: 256Mi

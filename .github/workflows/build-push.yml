@@ -37,6 +37,7 @@ jobs:
             dockerfile: docker/carts/Dockerfile
             build_tool: maven
             pom_override: docker/carts/pom.xml
+            src_override: docker/carts/src-override
           - name: orders
             # context is .../target, not the repo root: orders' Dockerfile does
             # "COPY *.jar" (not "./target/*.jar"), expecting the jar directly
@@ -91,6 +92,12 @@ jobs:
         # fixes to, so the corrected copy lives in our own repo instead and
         # gets spliced in here before the Maven build runs.
         run: cp ${{ matrix.pom_override }} ${{ matrix.maven_dir }}/pom.xml
+
+      - name: Apply source overrides
+        if: matrix.src_override != ''
+        # Same idea as the pom.xml override, for individual .java files that
+        # needed fixing but live in a read-only submodule.
+        run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
 
       - name: Build jar with Maven
         if: matrix.build_tool == 'maven'

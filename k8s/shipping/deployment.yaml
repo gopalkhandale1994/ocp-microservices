@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: shipping
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.3.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.4.0
           imagePullPolicy: IfNotPresent
           # Override privileged port 80 -> shipping's own application.properties
           # default of 8080, avoiding the need for root/anyuid.
@@ -47,4 +47,4 @@ spec:
               memory: 256Mi
             limits:
               cpu: 400m
-              memory: 768Mi
+              memory: 1Gi

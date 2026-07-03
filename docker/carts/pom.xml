@@ -36,19 +36,19 @@
              Spring Boot 2.0 and its SpringApplicationBuilder API, causing a
              hard NoSuchMethodError at startup. application.properties already
              sets spring.zipkin.enabled=false, so tracing was never active;
-             this dependency was dead weight even when it worked. It was also
-             the transitive source of spring-boot-starter-actuator, which
-             simpleclient_spring_boot needs directly (it registers itself as
-             an actuator endpoint), so it's added back explicitly below. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>io.prometheus</groupId>
-            <artifactId>simpleclient_spring_boot</artifactId>
-            <version>${prometheus.version}</version>
-        </dependency>
+             this dependency was dead weight even when it worked.
+
+             simpleclient_spring_boot removed too: it registers a Prometheus
+             endpoint via org.springframework.boot.actuate.endpoint.AbstractEndpoint,
+             a class Spring Boot 2.0 deleted entirely as part of its actuator
+             rewrite, so no version of spring-boot-starter-actuator brings it
+             back since it just doesn't exist any more. CartApplication.java's
+             @EnablePrometheusEndpoint annotation (from this same library) is
+             removed in docker/carts/src-override for the same reason. The
+             Histogram-based manual metrics in HTTPMonitoringInterceptor still
+             work fine; those come from plain io.prometheus:simpleclient (via
+             simpleclient_hotspot/simpleclient_servlet below), which was never
+             tied to Spring Boot's actuator API. -->
         <dependency>
             <groupId>io.prometheus</groupId>
             <artifactId>simpleclient_hotspot</artifactId>
