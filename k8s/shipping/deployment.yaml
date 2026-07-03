@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: shipping
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.4.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.5.0
           imagePullPolicy: IfNotPresent
           # Override privileged port 80 -> shipping's own application.properties
           # default of 8080, avoiding the need for root/anyuid.
@@ -25,6 +25,13 @@ spec:
             - -jar
             - ./app.jar
             - --port=8080
+          # This base image's JDK8 build predates reliable cgroup-aware heap
+          # sizing: without an explicit -Xmx it was sizing its default heap
+          # off the *node's* total memory, not this container's limit, and
+          # getting OOMKilled well under the limit as a result.
+          env:
+            - name: JAVA_OPTS
+              value: "-Xms64m -Xmx512m -XX:+UseG1GC -Djava.security.egd=file:/dev/urandom"
           ports:
             - containerPort: 8080
           # No httpGet probe: shipping disables the Actuator health endpoint

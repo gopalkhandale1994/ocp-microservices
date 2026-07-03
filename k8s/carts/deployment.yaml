@@ -16,14 +16,21 @@ spec:
     spec:
       containers:
         - name: carts
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.4.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.5.0
           imagePullPolicy: IfNotPresent
           # Original image's ENTRYPOINT binds port 80 (privileged, needs root).
           # Override to 8081 -- carts' own application.properties already
           # defaults server.port to 8081, so this matches the app's native default
           # and avoids needing the anyuid SCC just for this one port choice.
+          # -Xmx set explicitly: this JDK8 build predates reliable
+          # cgroup-aware heap sizing and was defaulting its heap off the
+          # node's total memory rather than this container's limit,
+          # getting OOMKilled well under the limit as a result.
           command:
             - java
+            - -Xms64m
+            - -Xmx512m
+            - -XX:+UseG1GC
             - -Djava.security.egd=file:/dev/urandom
             - -jar
             - ./app.jar

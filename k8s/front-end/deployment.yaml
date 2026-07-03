@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: front-end
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-front-end:0.4.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-front-end:0.5.0
           imagePullPolicy: IfNotPresent
           env:
             - name: SESSION_REDIS
