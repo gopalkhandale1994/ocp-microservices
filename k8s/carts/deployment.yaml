@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: carts
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.2.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.3.0
           imagePullPolicy: IfNotPresent
           # Original image's ENTRYPOINT binds port 80 (privileged, needs root).
           # Override to 8081 -- carts' own application.properties already
@@ -35,12 +35,12 @@ spec:
           readinessProbe:
             tcpSocket:
               port: 8081
-            initialDelaySeconds: 15
+            initialDelaySeconds: 60
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
               port: 8081
-            initialDelaySeconds: 30
+            initialDelaySeconds: 90
             periodSeconds: 20
           resources:
             requests:

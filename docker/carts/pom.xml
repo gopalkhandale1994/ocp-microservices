@@ -36,7 +36,14 @@
              Spring Boot 2.0 and its SpringApplicationBuilder API, causing a
              hard NoSuchMethodError at startup. application.properties already
              sets spring.zipkin.enabled=false, so tracing was never active;
-             this dependency was dead weight even when it worked. -->
+             this dependency was dead weight even when it worked. It was also
+             the transitive source of spring-boot-starter-actuator, which
+             simpleclient_spring_boot needs directly (it registers itself as
+             an actuator endpoint) -- added back explicitly below. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.prometheus</groupId>
             <artifactId>simpleclient_spring_boot</artifactId>

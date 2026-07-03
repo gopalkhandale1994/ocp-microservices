@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: shipping
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.2.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-shipping:0.3.0
           imagePullPolicy: IfNotPresent
           # Override privileged port 80 -> shipping's own application.properties
           # default of 8080, avoiding the need for root/anyuid.
@@ -34,12 +34,12 @@ spec:
           readinessProbe:
             tcpSocket:
               port: 8080
-            initialDelaySeconds: 15
+            initialDelaySeconds: 60
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
               port: 8080
-            initialDelaySeconds: 30
+            initialDelaySeconds: 90
             periodSeconds: 20
           resources:
             requests:
