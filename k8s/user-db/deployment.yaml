@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-db
+  labels:
+    app: user-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-db
+  template:
+    metadata:
+      labels:
+        app: user-db
+    spec:
+      serviceAccountName: sock-shop-data
+      containers:
+        - name: user-db
+          # Stock public image, unseeded. The original Sock Shop demo used a
+          # custom weaveworksdemos/user-db image pre-loaded with sample users,
+          # but that image's source isn't in any of the 8 repos we vendored --
+          # it lived in a separate, unlisted repo. Using plain mongo means you
+          # register your own test users through the app instead of having
+          # demo accounts available out of the box.
+          image: mongo:4.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 27017
+          readinessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi

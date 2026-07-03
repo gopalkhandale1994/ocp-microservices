@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carts
+  labels:
+    app: carts
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: carts
+  template:
+    metadata:
+      labels:
+        app: carts
+    spec:
+      containers:
+        - name: carts
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.1.0
+          imagePullPolicy: IfNotPresent
+          # Original image's ENTRYPOINT binds port 80 (privileged, needs root).
+          # Override to 8081 -- carts' own application.properties already
+          # defaults server.port to 8081, so this matches the app's native default
+          # and avoids needing the anyuid SCC just for this one port choice.
+          command:
+            - java
+            - -Djava.security.egd=file:/dev/urandom
+            - -jar
+            - ./app.jar
+            - --port=8081
+          ports:
+            - containerPort: 8081
+          # No readiness/liveness httpGet: carts disables the Actuator health
+          # endpoint (endpoints.health.enabled=false in application.properties).
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 300m
+              memory: 500Mi

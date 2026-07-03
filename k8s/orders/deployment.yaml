@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  labels:
+    app: orders
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orders
+  template:
+    metadata:
+      labels:
+        app: orders
+    spec:
+      containers:
+        - name: orders
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-orders:0.1.0
+          imagePullPolicy: IfNotPresent
+          # Original ENTRYPOINT binds privileged port 80 via the base image's
+          # java.sh wrapper. Override to 8082 (orders' own application.properties
+          # default) to avoid needing root/anyuid just for the port choice.
+          command:
+            - /usr/local/bin/java.sh
+            - -jar
+            - ./app.jar
+            - --port=8082
+          ports:
+            - containerPort: 8082
+          # No httpGet probe: orders disables the Actuator health endpoint.
+          readinessProbe:
+            tcpSocket:
+              port: 8082
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 300m
+              memory: 500Mi

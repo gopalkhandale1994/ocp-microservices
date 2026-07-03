@@ -1,0 +1,78 @@
+name: Build and Push Images
+
+# Push a tag like v0.1.0 to build & push all 9 images at that version, matching
+# the manual-semver tags already written into k8s/*/deployment.yaml. Also
+# runnable manually via workflow_dispatch for one-off rebuilds of the same version.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Image version tag (e.g. 0.1.0), must match k8s manifests'
+        required: true
+        default: '0.1.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: front-end
+            context: services/front-end
+            dockerfile: services/front-end/Dockerfile
+          - name: catalogue
+            context: services/catalogue
+            dockerfile: services/catalogue/docker/catalogue/Dockerfile
+          - name: catalogue-db
+            context: services/catalogue
+            dockerfile: services/catalogue/docker/catalogue-db/Dockerfile
+          - name: carts
+            context: services/carts
+            dockerfile: services/carts/Dockerfile
+          - name: orders
+            context: services/orders
+            dockerfile: services/orders/docker/orders/Dockerfile
+          - name: shipping
+            context: services/shipping
+            dockerfile: services/shipping/docker/shipping/Dockerfile
+          - name: payment
+            context: services/payment
+            dockerfile: services/payment/docker/payment/Dockerfile
+          - name: user
+            context: services/user
+            dockerfile: services/user/Dockerfile
+          - name: queue-master
+            context: services/queue-master
+            dockerfile: services/queue-master/Dockerfile
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/ocp-microservices-${{ matrix.name }}:${{ steps.version.outputs.value }}

@@ -1,0 +1,24 @@
+[submodule "services/front-end"]
+	path = services/front-end
+	url = https://github.com/microservices-demo/front-end.git
+[submodule "services/catalogue"]
+	path = services/catalogue
+	url = https://github.com/microservices-demo/catalogue.git
+[submodule "services/carts"]
+	path = services/carts
+	url = https://github.com/microservices-demo/carts.git
+[submodule "services/orders"]
+	path = services/orders
+	url = https://github.com/microservices-demo/orders.git
+[submodule "services/shipping"]
+	path = services/shipping
+	url = https://github.com/microservices-demo/shipping.git
+[submodule "services/payment"]
+	path = services/payment
+	url = https://github.com/microservices-demo/payment.git
+[submodule "services/user"]
+	path = services/user
+	url = https://github.com/microservices-demo/user.git
+[submodule "services/queue-master"]
+	path = services/queue-master
+	url = https://github.com/microservices-demo/queue-master.git
