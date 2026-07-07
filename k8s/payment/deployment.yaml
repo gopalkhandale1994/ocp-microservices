@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: payment
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-payment:0.6.1
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-payment:0.7.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

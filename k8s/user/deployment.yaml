@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: user
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-user:0.6.1
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-user:0.7.0
           imagePullPolicy: IfNotPresent
           # user's mongodb client reads MONGO_HOST from the environment with no
           # built-in default (unlike carts/orders), so it must be set explicitly.
