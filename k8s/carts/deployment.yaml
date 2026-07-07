@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: carts
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.6.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-carts:0.6.1
           imagePullPolicy: IfNotPresent
           # Original image's ENTRYPOINT binds port 80 (privileged, needs root).
           # Override to 8081 -- carts' own application.properties already

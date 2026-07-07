@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: catalogue-db
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-catalogue-db:0.6.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-catalogue-db:0.6.1
           imagePullPolicy: IfNotPresent
           env:
             - name: MYSQL_ROOT_PASSWORD
