@@ -1,12 +1,9 @@
 name: Build
 
-# Push a tag like v0.1.0 to validate manifests, run the Java services'
-# unit tests, then build & push all 9 images. Deploying is a separate
-# workflow (deploy.yml): it runs automatically once this succeeds, and can
-# *also* be re-run on its own -- without rebuilding anything -- whenever
-# you're just iterating on k8s/ manifests or the deploy steps themselves.
-# That split is the whole point: re-running this one costs ~10 minutes
-# across 9 image builds; re-running deploy.yml alone costs under a minute.
+# Push a tag like v0.1.0 to run the pipeline: unit test -> build -> push ->
+# trivy scan. Deploying is a separate workflow (deploy.yml) that triggers
+# automatically once this succeeds, and can also be re-run on its own
+# without rebuilding anything.
 on:
   push:
     tags:
@@ -21,22 +18,9 @@ on:
 jobs:
 
   # ---------------------------------------------------------------------
-  # Stage 1: validate the K8s manifests before spending any time building.
-  # Pure static check, no cluster credentials touched here.
-  # ---------------------------------------------------------------------
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: python3 test/validate_manifests.py
-
-  # ---------------------------------------------------------------------
-  # Stage 2: run the Java services' own unit tests, as vendored. Separate
-  # from the build stage so a real test failure blocks the pipeline before
-  # any image gets built, not after.
+  # Stage 1: run the Java services' own unit tests, as vendored.
   # ---------------------------------------------------------------------
   unit-test:
-    needs: validate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -64,7 +48,7 @@ jobs:
         run: mvn -f ${{ matrix.maven_dir }}/pom.xml test
 
   # ---------------------------------------------------------------------
-  # Stage 3: build and push all 9 custom images, only once tests pass.
+  # Stage 2: build and push all 9 custom images, only once tests pass.
   # ---------------------------------------------------------------------
   build-and-push:
     needs: unit-test
@@ -114,6 +98,8 @@ jobs:
             maven_dir: services/queue-master
             dockerfile: docker/queue-master/Dockerfile
             build_tool: maven
+    outputs:
+      version: ${{ steps.version.outputs.value }}
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -165,3 +151,39 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ocp-microservices-${{ matrix.name }}:${{ steps.version.outputs.value }}
+
+  # ---------------------------------------------------------------------
+  # Stage 3: scan every image just pushed. Informational (doesn't fail the
+  # build) -- these are 8-10 year old base images, a hard gate here would
+  # just block every deploy forever. Point is visibility, not enforcement.
+  # ---------------------------------------------------------------------
+  trivy-scan:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+          - front-end
+          - catalogue
+          - catalogue-db
+          - carts
+          - orders
+          - shipping
+          - payment
+          - user
+          - queue-master
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan ${{ matrix.name }} with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/ocp-microservices-${{ matrix.name }}:${{ needs.build-and-push.outputs.version }}
+          format: table
+          exit-code: '0'

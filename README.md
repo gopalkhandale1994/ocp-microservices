@@ -1,385 +1,130 @@
 # ocp-microservices
 
-Practice project: deploying the classic **Sock Shop** microservices demo app
-to **OpenShift** (Red Hat Developer Sandbox) using **GitHub Actions** for CI
-and plain `oc apply` for CD (ArgoCD/GitOps was investigated but isn't
-available on the free Sandbox tier — see [Known limitations](#known-limitations)).
+Deploy the **Sock Shop** microservices demo app to **OpenShift** using
+**GitHub Actions** for CI/CD. Vendored app source, unmodified; the
+`k8s/`, `docker/`, and `.github/workflows/` in this repo are the DevOps
+layer on top of it.
 
-## Architecture
-
-14 components, all deployed into a single namespace:
-
-| Component | Language/Image | Built by us? | Notes |
-|---|---|---|---|
-| front-end | Node.js | yes | public entrypoint, has the Route |
-| catalogue | Go | yes | real `/health` endpoint |
-| catalogue-db | MySQL 5.7 (custom seed) | yes | seeded via `dump.sql` |
-| carts | Java/Spring Boot 2.0.4 | yes | app source unmodified, has a known startup bug -- see [Known limitations](#known-limitations) |
-| carts-db | `bitnami/mongodb:latest` | no | stock image |
-| orders | Java/Spring Boot 1.4.4 | yes | |
-| orders-db | `bitnami/mongodb:latest` | no | stock image |
-| shipping | Java/Spring Boot 1.4.0 | yes | |
-| payment | Go | yes | real `/health` endpoint |
-| user | Go | yes | real `/health` endpoint |
-| user-db | `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8` | no | pinned old version, see below |
-| queue-master | Java/Spring Boot 1.4.0 | yes | |
-| rabbitmq | `rabbitmq:3.9-management` | no | stock image |
-| session-db | `redis:alpine` | no | stock image |
-
-The 8 app services (`front-end`, `catalogue`, `carts`, `orders`, `shipping`,
-`payment`, `user`, `queue-master`) are vendored as **git submodules** from
-the original (now archived) [`microservices-demo`](https://github.com/microservices-demo)
-GitHub org — their real upstream source, unmodified where possible.
-
-## Repo layout
+## What's in this repo
 
 ```
-services/          git submodules (upstream app source, read-only, unmodified)
-docker/            our own Dockerfiles for services whose submodule doesn't
-                   ship a working one (carts, queue-master) -- Dockerfiles
-                   only, never a patch to the app source itself
-k8s/<service>/     Deployment + Service (+ Route for front-end) per component
-test/              e2e test scripts + the manifest validator, all runnable
-                   locally or as CI pipeline stages (see Testing, below)
-.github/workflows/build.yml    validate -> unit-test -> build-and-push
-.github/workflows/deploy.yml   deploy -> smoke-test (auto-runs after build.yml,
-                                also independently re-runnable, see CI/CD pipeline)
+services/          git submodules -- upstream app source, unmodified
+docker/            our own Dockerfiles for the 2 services whose submodule
+                   doesn't ship a working one (carts, queue-master)
+k8s/<service>/     Deployment + Service (+ Route for front-end), one per
+                   component, plus k8s/rbac/ for the CI service account
+.github/workflows/build.yml    unit-test -> build-and-push -> trivy-scan
+.github/workflows/deploy.yml   deploy (auto-runs after build.yml succeeds,
+                                or run it on its own any time)
 ```
 
 ## Prerequisites
 
-- `oc`, `gh`, `kustomize` CLIs (`brew install openshift-cli gh kustomize`)
-- A GitHub repo with **Settings → Actions → General → Workflow permissions**
-  set to "Read and write" (lets the built-in `GITHUB_TOKEN` push to GHCR)
-- A Red Hat Developer Sandbox namespace (or any OpenShift namespace you're
-  admin of), logged in locally via `oc login`
+- `oc`, `gh` CLIs installed and on your PATH
+- An OpenShift namespace you're admin of (e.g. a Red Hat Developer
+  Sandbox namespace), and `oc login` working locally
+- A GitHub repo with **Settings → Actions → General → Workflow
+  permissions** set to "Read and write" (lets the built-in
+  `GITHUB_TOKEN` push images to GHCR)
 
-## Setup from scratch
+## 1. Clone
 
 ```bash
 git clone --recurse-submodules <this-repo>
 cd ocp-microservices
-gh auth login && gh auth setup-git
-oc login --token=... --server=...
 ```
 
-GHCR packages are private by default; either make them public (Packages tab
-on your GitHub profile) or create an `imagePullSecret` and link it to the
+## 2. Make the images pullable
+
+GHCR packages are private by default. Either make each
+`ocp-microservices-*` package public after the first push (Packages tab
+on your GitHub profile), or create a pull secret and link it to the
 namespace's `default` service account:
 
 ```bash
 oc create secret docker-registry ghcr-pull-secret \
-  --docker-server=ghcr.io --docker-username=<user> --docker-password=<PAT> \
+  --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<PAT> \
   -n <namespace>
 oc secrets link default ghcr-pull-secret --for=pull -n <namespace>
 ```
 
-For the pipeline's deploy/smoke-test stages, CI needs its own OpenShift
-credentials — **not** your personal `oc login` token (too short-lived, and
-too broad a grant for a robot). Create a dedicated service account scoped
-to just this namespace instead:
+## 3. Create the CI service account
+
+CI needs its own OpenShift credentials, scoped to just this namespace --
+not your personal `oc login` token.
 
 ```bash
 oc create serviceaccount github-ci -n <namespace>
-oc policy add-role-to-user edit -z github-ci -n <namespace>
+
+# Least-privilege Role, applied once -- not part of the routine deploy
+# (github-ci intentionally can't manage its own Role/RoleBinding)
+oc apply -f k8s/rbac/ci-deployer-role.yaml -n <namespace>
 
 TOKEN=$(oc create token github-ci -n <namespace> --duration=8760h)
 SERVER=$(oc whoami --show-server)
+```
+
+## 4. Configure GitHub secrets/variables
+
+```bash
 echo "$TOKEN" | gh secret set OC_TOKEN --repo <owner>/<repo>
 gh secret set OC_SERVER --repo <owner>/<repo> --body "$SERVER"
 gh variable set OC_NAMESPACE --repo <owner>/<repo> --body "<namespace>"
 unset TOKEN
 ```
 
-## CI/CD pipeline
-
-Two separate workflows, not one — rebuilding all 9 images every time you
-want to tweak a `k8s/` manifest or a deploy step is a waste of ~10 minutes.
-Push a version tag to kick off the whole chain:
+## 5. Run the pipeline
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-**`build.yml`** (validate → unit-test → build-and-push):
-1. **validate** — `test/validate_manifests.py` sanity-checks every file
-   under `k8s/` (valid YAML, has `apiVersion`/`kind`/`metadata.name`). Pure
-   static check, no cluster credentials touched.
-2. **unit-test** — runs the real `mvn test` suite for the four Java
-   services (`carts`, `orders`, `shipping`, `queue-master`), as vendored,
-   no patches applied. A real test failure blocks the pipeline here,
-   before anything gets built.
-3. **build-and-push** — matrix build over all 9 custom images, tagged
-   `ghcr.io/<owner>/ocp-microservices-<name>:<version>` (stripped from the
-   git tag) and pushed to GHCR. Bump the version in both the git tag and
-   every `k8s/*/deployment.yaml` image reference together — this project
-   uses manual semver, not `:latest`.
+This triggers **Build** (`unit-test` → `build-and-push` → `trivy-scan`),
+which pushes all 9 images to
+`ghcr.io/<owner>/ocp-microservices-<name>:0.1.0`. **Deploy** then runs
+automatically, applying `k8s/` and waiting for every rollout.
 
-**`deploy.yml`** (deploy → smoke-test) — triggers automatically once
-`build.yml` succeeds (via a `workflow_run` trigger, checking out the exact
-commit that was built):
-4. **deploy** — logs in as the `github-ci` service account and runs
-   `oc apply -R -f k8s/`, then waits on every Deployment's rollout status.
-5. **smoke-test** — runs `test/e2e-test.sh` (all 14 services reachable and
-   healthy) and `test/e2e-order-flow.sh` (a full register → login → add to
-   cart → place order journey, verified directly against `orders-db`/
-   `user-db`, not just trusted from the API response) against the
-   just-deployed namespace.
+To change versions later, bump the tag *and* every
+`k8s/*/deployment.yaml` image reference together (manual semver, not
+`:latest`), then repeat this step.
 
-`deploy.yml` can *also* be triggered on its own — Actions tab → Deploy →
-Run workflow — to re-apply manifests and re-run the smoke tests against
-whatever was last built, without touching `build.yml` at all. That's the
-one to use when you're iterating on a `k8s/*.yaml` change or a bug in the
-deploy/smoke-test steps themselves.
+`Deploy` can also be re-run on its own (Actions tab → Deploy → Run
+workflow) to re-apply `k8s/` without rebuilding any images -- useful when
+you're only changing a manifest.
 
-## Testing
-
-Both e2e scripts run from your own machine exactly the same way CI runs
-them — they operate entirely inside the cluster (via throwaway pods), so
-they aren't affected by the Route/router issue described below.
+## 6. Access the app
 
 ```bash
-./test/e2e-test.sh <namespace>          # all 14 services: readiness + real /health checks
-./test/e2e-order-flow.sh <namespace>    # register, login, add to cart, place an order,
-                                         # then confirm the documents landed in orders-db/user-db
+oc port-forward svc/front-end 8080:80 -n <namespace>
+# open http://localhost:8080
 ```
 
-## Deploying manually
+If your cluster's public Route works, `oc get route front-end -n
+<namespace>` gives you a URL directly instead. On some Sandbox-tier
+clusters, tenant Routes 503 regardless of app health (a platform-side
+Ingress issue, not fixable from inside the namespace) -- port-forward
+always works since it bypasses the Route entirely.
 
-```bash
-oc apply -R -f k8s/ -n <namespace>
-```
+## Known, unpatched upstream bugs
 
-If you've redeployed a few times and see stuck rollouts (old ReplicaSet
-never replaced), do a clean sweep instead of chasing it:
+This app's source is never modified, so these ship as-is:
 
-```bash
-oc delete deployment --all -n <namespace>
-oc apply -R -f k8s/ -n <namespace>
-```
+- **`carts` fails to boot.** Its vendored `pom.xml` pins
+  `spring-cloud-starter-zipkin:1.1.0.RELEASE` against
+  `spring-boot-starter-parent:2.0.4.RELEASE`, throwing
+  `NoSuchMethodError` on `SpringApplicationBuilder` at startup. Debugging
+  and fixing this is a good first exercise.
+- **`front-end` can crash on one bad response shape.** `POST /orders`
+  checks `body.status_code === 500` on the raw response string, before
+  `JSON.parse` -- always false. An error response from `user` with no
+  `_links` field throws an uncaught `TypeError` that crashes the whole
+  Node process.
+- **No seed data in `user-db`.** Register test users through the app.
 
-## Real issues hit & fixed (worth reading before you redo this)
+## License
 
-This is 8-10 year old code being rebuilt and deployed today. Nearly every
-failure was a real bug, not a config typo — worth knowing about in advance:
-
-1. **Dead base image**: `java:openjdk-8-alpine` was removed from Docker Hub
-   entirely. Fixed by swapping to `eclipse-temurin:8-jre-alpine` in
-   `docker/carts/Dockerfile` and `docker/queue-master/Dockerfile` (the
-   originals, still in the submodules, are untouched).
-2. **Missing Maven build step**: the Java services' Dockerfiles assume a
-   pre-built `target/*.jar` exists (`COPY target/*.jar`) — CI has to run
-   `mvn package` before `docker build`, which the original repo's own CI
-   handled outside the Dockerfile.
-3. **Broken build context**: `catalogue-db`'s Dockerfile does
-   `COPY ./data/dump.sql`, which only resolves if the Docker build context
-   is set to its own subdirectory, not the repo root.
-4. **Submodule `.git` breaks legacy tooling**: `catalogue`/`payment` use the
-   pre-Go-modules `gvt` tool, which runs `git` commands internally. A
-   submodule's `.git` is a one-line **gitlink file** pointing at a path that
-   doesn't exist inside the Docker build context — git hard-fails on *any*
-   command when it finds a broken gitlink (not when there's no `.git` at
-   all). Fix: `rm -f <context>/.git` before building.
-5. **JVM heap sizing**: the old JDK8 builds here predate reliable
-   cgroup-aware default heap sizing — without an explicit `-Xmx`, they were
-   sizing off the *node's* total memory rather than the container's limit,
-   getting OOMKilled well under whatever limit was set. Fix: explicit
-   `-Xmx`/`JAVA_OPTS` on every JVM service.
-6. **Dead `setcap` step** (`queue-master`): the original Dockerfile grants
-   `cap_net_bind_service` so java can bind port 80 as non-root. We moved to
-   port 8080 instead (no privileged-port issue), but OpenShift's
-   `no_new_privs` enforcement actively blocks *executing* a binary that
-   carries a leftover file capability — had to remove the step entirely,
-   not just stop relying on it.
-7. **`mongo` (any tag) blocked**: this specific Sandbox cluster transparently
-   rewrites all `docker.io/library/mongo` pulls through an internal mirror
-   that 403s ("bad credentials") — confirmed identical failure across
-   several tags, not fixable from inside the namespace. `bitnami/mongodb`
-   isn't subject to that rewrite.
-8. **Mongo driver/server version gap** (`user`): `user`'s ~2017-era Go
-   `mgo` driver can't handshake with MongoDB 8.x (bitnami's `:latest`,
-   since bitnami's free tier no longer publishes *any* older version tag).
-   Fixed by switching just `user-db` to
-   `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`, a real official
-   image with actual pinned old versions available.
-9. **`anyuid` SCC can't be granted**: a Sandbox namespace-admin can't grant
-   an SCC they don't hold themselves (standard RBAC escalation
-   prevention) — so a `RoleBinding` to `anyuid` always fails here. Turned
-   out to be unnecessary anyway: all the stock datastore images ran fine
-   under the default restricted SCC. Where a volume genuinely needs to be
-   writable under an arbitrary UID (`user-db`'s `/data/db`), the fix is an
-   `emptyDir` volume + omitting `fsGroup` (let OpenShift auto-assign one
-   from the namespace's allowed range — a hardcoded value gets rejected).
-10. **Probe timing**: these old Spring Boot apps have genuinely slow cold
-    starts (one bean-init step alone logged 53 seconds) — default/short
-    `initialDelaySeconds` values kill them mid-boot in an endless crash
-    loop that has nothing to do with the app itself. `orders`/`shipping`
-    ended up needing 100s readiness / 180s liveness delays.
-11. **Same Mongo driver/version gap, different service** (`orders`): all 14
-    pods reporting healthy and TCP-reachable did *not* mean writes worked —
-    `orders-db` (also `bitnami/mongodb:latest`) rejected every insert from
-    `orders` with `Unsupported OP_QUERY command: insert` (code 352).
-    `orders` runs 2016-era Spring Boot 1.4.4, whose Mongo driver still
-    issues legacy `OP_QUERY` opcodes that MongoDB removed entirely in 5.1+;
-    `carts` (Spring Boot 2.0.4, a modern driver) was never affected — this
-    only surfaced once a full order-flow test actually exercised a write,
-    not just a connection. Same fix as `user-db`: switched to
-    `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`.
-
-None of the above touch application source — they're all Dockerfile, JVM
-flags, image choice, or k8s config. This project deliberately does not
-patch the vendored app code itself, even where a real bug is known (see
-[Known limitations](#known-limitations)): the goal is to redeploy the
-real upstream app as-is, bugs included, not to publish a patched fork.
-
-## Known limitations
-
-- **No ArgoCD/GitOps**: the free Developer Sandbox doesn't have the
-  OpenShift GitOps operator installed, and a namespace-admin can't install
-  cluster-scoped operators or CRDs themselves. Deploys are via plain
-  `oc apply`. Revisit this on a cluster where you have (or can get)
-  cluster-admin, e.g. OpenShift Local (CRC).
-- **Public Route returns 503**: not this project's config — every layer we
-  can inspect (Service, EndpointSlice, Pod, Route admission, NetworkPolicy)
-  is correct, and the app works perfectly when called from inside the
-  cluster (that's exactly what the e2e tests do, which is why they aren't
-  affected). Confirmed via a from-scratch nginx pod+service+route test that
-  hits the identical 503 — re-confirmed days later, same result. The more
-  precise finding: the platform's own console route (same router, same
-  `apps.` domain) works fine, so it's not the whole router down — it's
-  specific to tenant-created routes on this cluster shard, likely an
-  `IngressController` namespace/route selector that isn't picking up tenant
-  namespaces correctly. Not something a namespace-scoped user can inspect
-  or fix (`IngressController` objects live in `openshift-ingress-operator`).
-  Rather than chase a platform bug, view the app in a browser via
-  port-forward instead:
-  ```bash
-  oc port-forward svc/front-end 8080:80 -n <namespace>
-  # then open http://localhost:8080
-  ```
-- **`user-db` has no seed data**: the original demo's `weaveworksdemos/user-db`
-  image (pre-loaded with sample users) isn't in any of the 8 vendored
-  repos — it lived in a separate, unlisted one. Register test users through
-  the app instead of expecting demo accounts.
-- **`carts` may fail to boot: real upstream bugs, deliberately not patched.**
-  The vendored pom pins `spring-cloud-starter-zipkin:1.1.0.RELEASE`
-  (pre-Boot-2.0) alongside `spring-boot-starter-parent:2.0.4.RELEASE`,
-  which throws `NoSuchMethodError` on `SpringApplicationBuilder`; separately,
-  `io.prometheus:simpleclient_spring_boot` depends on `AbstractEndpoint`, a
-  class Spring Boot 2.0 deleted entirely as part of its actuator rewrite.
-  It also autowires a JPA-specific Spring Data REST bean (`JpaHelper`) as
-  required, in a Mongo-backed app where nothing guarantees that bean
-  exists. All three are real, upstream bugs in the vendored `pom.xml`/Java
-  source — not something this project's `docker/carts/Dockerfile` (build
-  process only) can fix without editing app code, which this project
-  intentionally doesn't do. Debugging and fixing this is left as the
-  exercise.
-- **`front-end` can crash on a specific bad response.** `POST /orders`
-  checks `body.status_code === 500` on the raw response *string*, before
-  `JSON.parse` — always false (strings don't have that property). If
-  `user` ever returns an error body with no `_links` field, the code falls
-  through to `jsonBody._links.customer.href` and throws an uncaught
-  `TypeError`, which crashes the whole Node process for every user, not
-  just the one request. Same reasoning as above: a real bug in vendored
-  `services/front-end/api/orders/index.js`, deliberately left unpatched.
-
-## Security notes (read before reusing any of this elsewhere)
-
-- **Licensing**: all 8 vendored services (`services/*`) are Apache License
-  2.0 — permissive, safe for internal use/modification. LICENSE files are
-  intact in each submodule and this project doesn't touch app source at
-  all (see [Repo layout](#repo-layout)), so there's nothing to carry
-  "changed" notices for; don't strip the LICENSE files if you copy code
-  out yourself.
-- **This is a practice deployment, not a production template.** A few
-  things here are *intentionally* insecure because they only ever run
-  inside a private, single-user Sandbox namespace with no real user data:
-  `catalogue-db`'s `MYSQL_ROOT_PASSWORD=fake_password` and
-  `carts-db`'s `ALLOW_EMPTY_PASSWORD=yes` are both literally what they say —
-  don't carry either pattern into anything that isn't a disposable
-  practice cluster.
-- **Dependency age**: the vendored services run 8-10 year old framework
-  versions (Spring Boot 1.4.x/2.0.4, Node 10-era front-end deps, pre-Go-modules
-  Go). These almost certainly have known CVEs in their dependency chains —
-  that's *why* rebuilding this today surfaced so many real bugs (see the
-  numbered list above). GitHub Dependabot alerts are enabled on this repo,
-  so check the Security tab before assuming anything here is current.
-- **No malicious code found.** Checked for remote-download-and-execute
-  patterns, unexpected outbound network calls, and obfuscated/eval-based
-  code across the vendored source — nothing outside well-known vendored
-  front-end libraries (jQuery, etc.) and one dead-code path worth knowing
-  about: `queue-master`'s `DockerSpawner.java` can spawn arbitrary Docker
-  containers via the Docker API, but its only caller has those calls
-  commented out (confirmed dead, not reachable in normal operation).
-- **CI credentials are least-privilege**: `github-ci` (used by
-  `deploy.yml`) is bound to a custom `Role` (`k8s/rbac/ci-deployer-role.yaml`)
-  scoped to exactly the resources the pipeline touches — not OpenShift's
-  built-in `edit` role, which would also grant it read/write on every
-  Secret in the namespace.
-- **Automated SAST scan (CodeQL)**: `.github/workflows/codeql.yml` runs
-  GitHub's CodeQL scanner across JS, Go, and Java on every push to `main`
-  and weekly — results live in the repo's Security tab, not just this file.
-  First run found 50 alerts, effectively all inside the vendored 2016-era
-  demo app itself, not in anything written for this deployment:
-  - **Critical**: 12 SSRF findings in `front-end`'s `api/user`, `api/cart`,
-    and `helpers/index.js` — internal calls to other services built from
-    request data without validating the target.
-  - **High**: reflected XSS in `shipping`'s `ShippingController.java`, weak
-    password hashing in `user/api/service.go`, no CSRF middleware on
-    `front-end/server.js`'s session cookie, clear-text logging of session
-    data in `public/js/client.js`, and a DOM-XSS bug in the vendored
-    `jquery.flexslider.js` library.
-  - **Medium**: Spring Boot actuators left exposed in `shipping`'s and
-    `queue-master`'s `pom.xml`, an open redirect in `front-end/helpers/index.js`,
-    session cookie sent without `Secure`, plus ~20 more findings inside
-    `jquery.flexslider.js` (an unmaintained third-party plugin, not
-    project code).
-  None of this was introduced by the OpenShift/CI work in this repo — it's
-  what a real static scan finds in an 8-10 year old demo app once you
-  point one at it. Treat the Security tab as the live source of truth;
-  this bullet is a snapshot, not a promise it stays accurate. **All of it
-  is left open, on purpose**: this project's policy is to redeploy the
-  vendored app as-is and never patch its source (see
-  [Repo layout](#repo-layout) and [Known limitations](#known-limitations))
-  — even where a fix would be trivial (the `shipping` XSS, the exposed
-  actuators), so the scan reflects the real upstream app, not a patched
-  fork. The one exception worth calling out explicitly: all 12
-  "critical" SSRF findings are false positives, not just unpatched —
-  every one is `request.get(endpoints.someUrl + '/' + userInput)`, where
-  the host/protocol is always a fixed internal service URL from config
-  and only the path suffix is request-influenced. That's not SSRF (an
-  attacker who fully controlled the URL could redirect the request
-  anywhere; controlling a path segment on a fixed host can't).
-- **Automated image scan (Trivy)**: `.github/workflows/image-scan.yml`
-  pulls each of the 9 images actually pushed to GHCR (tag read straight out
-  of `k8s/<service>/deployment.yaml`) and scans OS packages + language
-  dependencies baked into the image — the layer CodeQL can't see, since it
-  only looks at source. First run: **1,208 findings** (159 critical, 514
-  high, 429 medium, 97 low) concentrated almost entirely in `carts`,
-  `orders`, and `queue-master` — the three Spring Boot/Tomcat images built
-  from `docker/*/Dockerfile`s using old base images. Two worth naming
-  specifically because they're well-known, not just scanner noise:
-  **CVE-2022-22965 (Spring4Shell)** and **CVE-2020-1938 (Ghostcat)**, both
-  real RCE-class vulnerabilities in the bundled Spring/Tomcat versions.
-  `catalogue`, `payment`, and `user` (Go, no framework runtime baked in)
-  came back with a fraction of the findings by comparison. This is the
-  single strongest argument in this whole review for treating the images
-  as disposable practice artifacts, not something to expose past a
-  private Sandbox namespace — patching this properly means rebuilding on
-  current base images and framework versions, which is out of scope for
-  a "redeploy the vendored app as-is" exercise but would be the first
-  real task for whoever inherits this for anything beyond practice.
-- **Dependabot caught a real supply-chain incident in this repo's own CI,
-  same day it was added**: pinning `aquasecurity/trivy-action` (used by
-  `image-scan.yml` above) triggered a critical alert —
-  [GHSA-69fq-xp46-6x23](https://github.com/advisories/GHSA-69fq-xp46-6x23):
-  in March 2026 a threat actor used compromised maintainer credentials to
-  force-push 76 of 77 `trivy-action` version tags to credential-stealing
-  malware. Versions before `0.35.0` are affected; this repo pins
-  `v0.36.0`, so the alert shows `fixed`, not `open` — but it's a concrete
-  reminder that a `uses:` line in a workflow is a supply-chain dependency
-  too, same as anything in `pom.xml` or `package.json` — not just
-  first-party code and vendored app source. Dependabot watches GitHub
-  Actions the same way it watches library manifests, which is exactly
-  how this got caught same-day instead of silently.
+The 8 vendored services under `services/*` are each Apache License 2.0,
+with their own `LICENSE` file intact in every submodule -- unmodified,
+so no changes to attribute. This repo's own files (`k8s/`, `docker/`,
+`.github/workflows/`) are the DevOps layer written for this deployment.
