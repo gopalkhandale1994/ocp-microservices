@@ -332,6 +332,31 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   what a real static scan finds in an 8-10 year old demo app once you
   point one at it. Treat the Security tab as the live source of truth;
   this bullet is a snapshot, not a promise it stays accurate.
+  - **Fixed** (v0.6.1, via the `docker/*/resource-override` and
+    `src-override` mechanism, since the real source lives in read-only
+    submodules): actuators disabled entirely on `shipping` and
+    `queue-master` (`endpoints.enabled=false` — Spring Boot 1.4.x exposes
+    `/env`, `/dump`, `/trace` etc. unauthenticated with no
+    spring-security on the classpath, and neither service uses actuator
+    at runtime); the reflected-XSS path variable in `ShippingController`
+    is now HTML-escaped; `front-end`'s session cookie now sets
+    `sameSite: 'lax'` (mitigates the CSRF gap without needing HTTPS,
+    which the current port-forward/edge-route setup doesn't have
+    end-to-end) and reads its signing secret from `SESSION_SECRET` with
+    the old literal as a fallback.
+  - **Checked and NOT a real bug**: all 12 "critical" SSRF findings. Every
+    one of them is `request.get(endpoints.someUrl + '/' + userInput)` —
+    the host and protocol are always a fixed internal service URL from
+    config, never attacker-controlled; only the path suffix is. That's
+    not SSRF (an attacker who fully controlled the URL could redirect the
+    request anywhere; controlling a path segment on a fixed host can't).
+  - **Left as-is, documented, not worth the effort here**: the weak
+    SHA-1 password hash in `user/api/service.go` (already covered by the
+    "intentionally weak demo credentials" note above — a real fix means
+    a bcrypt migration, out of scope for a vendored demo with no real
+    user data) and the ~30 findings inside `jquery.flexslider.js` (an
+    unmaintained third-party plugin bundled by the original project, not
+    something to patch line-by-line).
 - **Automated image scan (Trivy)**: `.github/workflows/image-scan.yml`
   pulls each of the 9 images actually pushed to GHCR (tag read straight out
   of `k8s/<service>/deployment.yaml`) and scans OS packages + language
