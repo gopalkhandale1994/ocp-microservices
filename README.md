@@ -42,7 +42,9 @@ docker/            Dockerfile/pom.xml/source overrides for the services
 k8s/<service>/     Deployment + Service (+ Route for front-end) per component
 test/              e2e test scripts + the manifest validator, all runnable
                    locally or as CI pipeline stages (see Testing, below)
-.github/workflows/ci-cd.yml   validate -> unit-test -> build -> deploy -> smoke-test
+.github/workflows/build.yml    validate -> unit-test -> build-and-push
+.github/workflows/deploy.yml   deploy -> smoke-test (auto-runs after build.yml,
+                                also independently re-runnable, see CI/CD pipeline)
 ```
 
 ## Prerequisites
@@ -92,14 +94,16 @@ unset TOKEN
 
 ## CI/CD pipeline
 
-`.github/workflows/ci-cd.yml` runs as five sequential stages, triggered by
-pushing a version tag (each stage only runs if the previous one passed):
+Two separate workflows, not one — rebuilding all 9 images every time you
+want to tweak a `k8s/` manifest or a deploy step is a waste of ~10 minutes.
+Push a version tag to kick off the whole chain:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
+**`build.yml`** (validate → unit-test → build-and-push):
 1. **validate** — `test/validate_manifests.py` sanity-checks every file
    under `k8s/` (valid YAML, has `apiVersion`/`kind`/`metadata.name`). Pure
    static check, no cluster credentials touched.
@@ -112,6 +116,10 @@ git push origin v0.1.0
    git tag) and pushed to GHCR. Bump the version in both the git tag and
    every `k8s/*/deployment.yaml` image reference together — this project
    uses manual semver, not `:latest`.
+
+**`deploy.yml`** (deploy → smoke-test) — triggers automatically once
+`build.yml` succeeds (via a `workflow_run` trigger, checking out the exact
+commit that was built):
 4. **deploy** — logs in as the `github-ci` service account and runs
    `oc apply -R -f k8s/`, then waits on every Deployment's rollout status.
 5. **smoke-test** — runs `test/e2e-test.sh` (all 14 services reachable and
@@ -119,6 +127,12 @@ git push origin v0.1.0
    cart → place order journey, verified directly against `orders-db`/
    `user-db`, not just trusted from the API response) against the
    just-deployed namespace.
+
+`deploy.yml` can *also* be triggered on its own — Actions tab → Deploy →
+Run workflow — to re-apply manifests and re-run the smoke tests against
+whatever was last built, without touching `build.yml` at all. That's the
+one to use when you're iterating on a `k8s/*.yaml` change or a bug in the
+deploy/smoke-test steps themselves.
 
 ## Testing
 

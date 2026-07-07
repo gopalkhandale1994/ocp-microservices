@@ -1,10 +1,13 @@
-name: CI/CD
+name: Build
 
-# Push a tag like v0.1.0 to run the full pipeline: validate manifests, run
-# the Java services' unit tests, build & push all 9 images, deploy to the
-# OpenShift namespace, then smoke-test the live deployment. Each stage only
-# runs if the previous one passed. Also runnable manually for a one-off
-# rebuild/redeploy at an existing version.
+# Push a tag like v0.1.0 to validate manifests, run the Java services'
+# unit tests, then build & push all 9 images. Deploying is a separate
+# workflow (deploy.yml): it runs automatically once this succeeds, and can
+# *also* be re-run on its own -- without rebuilding anything -- whenever
+# you're just iterating on k8s/ manifests or the deploy/smoke-test steps
+# themselves. That split is the whole point: re-running this one costs
+# ~10 minutes across 9 image builds; re-running deploy.yml alone costs
+# under a minute.
 on:
   push:
     tags:
@@ -197,64 +200,3 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ocp-microservices-${{ matrix.name }}:${{ steps.version.outputs.value }}
-
-  # ---------------------------------------------------------------------
-  # Stage 4: deploy to OpenShift, using a dedicated CI service account
-  # (namespace-scoped "edit" role) -- not a personal login token.
-  # ---------------------------------------------------------------------
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install oc CLI
-        uses: redhat-actions/oc-installer@v1
-        with:
-          oc_version: 'latest'
-
-      - name: Log in to OpenShift
-        uses: redhat-actions/oc-login@v1
-        with:
-          openshift_server_url: ${{ secrets.OC_SERVER }}
-          openshift_token: ${{ secrets.OC_TOKEN }}
-          namespace: ${{ vars.OC_NAMESPACE }}
-
-      - name: Apply manifests
-        run: oc apply -R -f k8s/ -n ${{ vars.OC_NAMESPACE }}
-
-      - name: Wait for rollouts
-        run: |
-          for d in front-end catalogue catalogue-db carts carts-db orders orders-db \
-                   shipping payment queue-master rabbitmq session-db user user-db; do
-            echo "waiting for $d..."
-            oc rollout status "deployment/$d" -n ${{ vars.OC_NAMESPACE }} --timeout=240s
-          done
-
-  # ---------------------------------------------------------------------
-  # Stage 5: smoke-test the live deployment -- the same scripts used by
-  # hand during development, now run automatically after every deploy.
-  # ---------------------------------------------------------------------
-  smoke-test:
-    needs: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install oc CLI
-        uses: redhat-actions/oc-installer@v1
-        with:
-          oc_version: 'latest'
-
-      - name: Log in to OpenShift
-        uses: redhat-actions/oc-login@v1
-        with:
-          openshift_server_url: ${{ secrets.OC_SERVER }}
-          openshift_token: ${{ secrets.OC_TOKEN }}
-          namespace: ${{ vars.OC_NAMESPACE }}
-
-      - name: Health check all services
-        run: ./test/e2e-test.sh ${{ vars.OC_NAMESPACE }}
-
-      - name: Full order-flow test
-        run: ./test/e2e-order-flow.sh ${{ vars.OC_NAMESPACE }}
