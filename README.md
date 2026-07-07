@@ -332,3 +332,35 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   what a real static scan finds in an 8-10 year old demo app once you
   point one at it. Treat the Security tab as the live source of truth;
   this bullet is a snapshot, not a promise it stays accurate.
+- **Automated image scan (Trivy)**: `.github/workflows/image-scan.yml`
+  pulls each of the 9 images actually pushed to GHCR (tag read straight out
+  of `k8s/<service>/deployment.yaml`) and scans OS packages + language
+  dependencies baked into the image — the layer CodeQL can't see, since it
+  only looks at source. First run: **1,208 findings** (159 critical, 514
+  high, 429 medium, 97 low) concentrated almost entirely in `carts`,
+  `orders`, and `queue-master` — the three Spring Boot/Tomcat images built
+  from `docker/*/Dockerfile`s using old base images. Two worth naming
+  specifically because they're well-known, not just scanner noise:
+  **CVE-2022-22965 (Spring4Shell)** and **CVE-2020-1938 (Ghostcat)**, both
+  real RCE-class vulnerabilities in the bundled Spring/Tomcat versions.
+  `catalogue`, `payment`, and `user` (Go, no framework runtime baked in)
+  came back with a fraction of the findings by comparison. This is the
+  single strongest argument in this whole review for treating the images
+  as disposable practice artifacts, not something to expose past a
+  private Sandbox namespace — patching this properly means rebuilding on
+  current base images and framework versions, which is out of scope for
+  a "redeploy the vendored app as-is" exercise but would be the first
+  real task for whoever inherits this for anything beyond practice.
+- **Dependabot caught a real supply-chain incident in this repo's own CI,
+  same day it was added**: pinning `aquasecurity/trivy-action` (used by
+  `image-scan.yml` above) triggered a critical alert —
+  [GHSA-69fq-xp46-6x23](https://github.com/advisories/GHSA-69fq-xp46-6x23):
+  in March 2026 a threat actor used compromised maintainer credentials to
+  force-push 76 of 77 `trivy-action` version tags to credential-stealing
+  malware. Versions before `0.35.0` are affected; this repo pins
+  `v0.36.0`, so the alert shows `fixed`, not `open` — but it's a concrete
+  reminder that a `uses:` line in a workflow is a supply-chain dependency
+  too, same as anything in `pom.xml` or `package.json` — not just
+  first-party code and vendored app source. Dependabot watches GitHub
+  Actions the same way it watches library manifests, which is exactly
+  how this got caught same-day instead of silently.
