@@ -35,12 +35,14 @@ GitHub org — their real upstream source, unmodified where possible.
 
 ```
 services/          git submodules (upstream app source, read-only)
-docker/            Dockerfile/pom.xml/source overrides for the 2-3 services
+docker/            Dockerfile/pom.xml/source overrides for the services
                    whose submodule content needed a real fix (see below) --
                    these get spliced into the build by CI, since we can't
                    push changes into a submodule's own upstream repo
 k8s/<service>/     Deployment + Service (+ Route for front-end) per component
-.github/workflows/build-push.yml   CI: builds & pushes all 9 custom images
+test/              e2e test scripts + the manifest validator, all runnable
+                   locally or as CI pipeline stages (see Testing, below)
+.github/workflows/ci-cd.yml   validate -> unit-test -> build -> deploy -> smoke-test
 ```
 
 ## Prerequisites
@@ -60,21 +62,6 @@ gh auth login && gh auth setup-git
 oc login --token=... --server=...
 ```
 
-## CI/CD pipeline
-
-Push a version tag to build and push all 9 images:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-`.github/workflows/build-push.yml` runs a matrix build over all 9 custom
-images, tags each `ghcr.io/<owner>/ocp-microservices-<name>:<version>`
-(stripped from the git tag), and pushes to GHCR. Bump the version in both
-the git tag and every `k8s/*/deployment.yaml` image reference together —
-this project uses manual semver, not `:latest`.
-
 GHCR packages are private by default; either make them public (Packages tab
 on your GitHub profile) or create an `imagePullSecret` and link it to the
 namespace's `default` service account:
@@ -86,7 +73,66 @@ oc create secret docker-registry ghcr-pull-secret \
 oc secrets link default ghcr-pull-secret --for=pull -n <namespace>
 ```
 
-## Deploying
+For the pipeline's deploy/smoke-test stages, CI needs its own OpenShift
+credentials — **not** your personal `oc login` token (too short-lived, and
+too broad a grant for a robot). Create a dedicated service account scoped
+to just this namespace instead:
+
+```bash
+oc create serviceaccount github-ci -n <namespace>
+oc policy add-role-to-user edit -z github-ci -n <namespace>
+
+TOKEN=$(oc create token github-ci -n <namespace> --duration=8760h)
+SERVER=$(oc whoami --show-server)
+echo "$TOKEN" | gh secret set OC_TOKEN --repo <owner>/<repo>
+gh secret set OC_SERVER --repo <owner>/<repo> --body "$SERVER"
+gh variable set OC_NAMESPACE --repo <owner>/<repo> --body "<namespace>"
+unset TOKEN
+```
+
+## CI/CD pipeline
+
+`.github/workflows/ci-cd.yml` runs as five sequential stages, triggered by
+pushing a version tag (each stage only runs if the previous one passed):
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+1. **validate** — `test/validate_manifests.py` sanity-checks every file
+   under `k8s/` (valid YAML, has `apiVersion`/`kind`/`metadata.name`). Pure
+   static check, no cluster credentials touched.
+2. **unit-test** — runs the real `mvn test` suite for the four Java
+   services (`carts`, `orders`, `shipping`, `queue-master`), applying the
+   same pom/source overrides the build stage uses. A real test failure
+   blocks the pipeline here, before anything gets built.
+3. **build-and-push** — matrix build over all 9 custom images, tagged
+   `ghcr.io/<owner>/ocp-microservices-<name>:<version>` (stripped from the
+   git tag) and pushed to GHCR. Bump the version in both the git tag and
+   every `k8s/*/deployment.yaml` image reference together — this project
+   uses manual semver, not `:latest`.
+4. **deploy** — logs in as the `github-ci` service account and runs
+   `oc apply -R -f k8s/`, then waits on every Deployment's rollout status.
+5. **smoke-test** — runs `test/e2e-test.sh` (all 14 services reachable and
+   healthy) and `test/e2e-order-flow.sh` (a full register → login → add to
+   cart → place order journey, verified directly against `orders-db`/
+   `user-db`, not just trusted from the API response) against the
+   just-deployed namespace.
+
+## Testing
+
+Both e2e scripts run from your own machine exactly the same way CI runs
+them — they operate entirely inside the cluster (via throwaway pods), so
+they aren't affected by the Route/router issue described below.
+
+```bash
+./test/e2e-test.sh <namespace>          # all 14 services: readiness + real /health checks
+./test/e2e-order-flow.sh <namespace>    # register, login, add to cart, place an order,
+                                         # then confirm the documents landed in orders-db/user-db
+```
+
+## Deploying manually
 
 ```bash
 oc apply -R -f k8s/ -n <namespace>
@@ -169,6 +215,26 @@ failure was a real bug, not a config typo — worth knowing about in advance:
     `initialDelaySeconds` values kill them mid-boot in an endless crash
     loop that has nothing to do with the app itself. `orders`/`shipping`
     ended up needing 100s readiness / 180s liveness delays.
+13. **Same Mongo driver/version gap, different service** (`orders`): all 14
+    pods reporting healthy and TCP-reachable did *not* mean writes worked —
+    `orders-db` (also `bitnami/mongodb:latest`) rejected every insert from
+    `orders` with `Unsupported OP_QUERY command: insert` (code 352).
+    `orders` runs 2016-era Spring Boot 1.4.4, whose Mongo driver still
+    issues legacy `OP_QUERY` opcodes that MongoDB removed entirely in 5.1+;
+    `carts` (Spring Boot 2.0.4, a modern driver) was never affected — this
+    only surfaced once `test/e2e-order-flow.sh` actually exercised a write,
+    not just a connection. Same fix as `user-db`: switched to
+    `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`.
+14. **A single bad response could crash all of front-end**: `POST /orders`
+    checked `body.status_code === 500` on the raw response *string*, before
+    `JSON.parse` — always false (strings don't have that property), so it
+    was dead code. Any error response from `user` (no `_links` field at
+    all) fell through to `jsonBody._links.customer.href` and threw an
+    uncaught `TypeError`, which crashes the entire Node process — no
+    per-request isolation, so one bad request took down front-end for every
+    user. Sibling handlers in the same file (`/card`, `/address`) already
+    guarded this correctly; this one didn't. Fixed via a source overlay
+    (`docker/front-end/src-override`) that parses first, then checks.
 
 ## Known limitations
 
