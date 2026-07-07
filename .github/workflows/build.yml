@@ -4,10 +4,9 @@ name: Build
 # unit tests, then build & push all 9 images. Deploying is a separate
 # workflow (deploy.yml): it runs automatically once this succeeds, and can
 # *also* be re-run on its own -- without rebuilding anything -- whenever
-# you're just iterating on k8s/ manifests or the deploy/smoke-test steps
-# themselves. That split is the whole point: re-running this one costs
-# ~10 minutes across 9 image builds; re-running deploy.yml alone costs
-# under a minute.
+# you're just iterating on k8s/ manifests or the deploy steps themselves.
+# That split is the whole point: re-running this one costs ~10 minutes
+# across 9 image builds; re-running deploy.yml alone costs under a minute.
 on:
   push:
     tags:
@@ -32,9 +31,9 @@ jobs:
       - run: python3 test/validate_manifests.py
 
   # ---------------------------------------------------------------------
-  # Stage 2: run the Java services' actual unit tests. Separate from the
-  # build stage so a real test failure blocks the pipeline before any
-  # image gets built, not after.
+  # Stage 2: run the Java services' own unit tests, as vendored. Separate
+  # from the build stage so a real test failure blocks the pipeline before
+  # any image gets built, not after.
   # ---------------------------------------------------------------------
   unit-test:
     needs: validate
@@ -45,17 +44,12 @@ jobs:
         include:
           - name: carts
             maven_dir: services/carts
-            pom_override: docker/carts/pom.xml
-            src_override: docker/carts/src-override
           - name: orders
             maven_dir: services/orders
           - name: shipping
             maven_dir: services/shipping
-            src_override: docker/shipping/src-override
-            resource_override: docker/shipping/resource-override
           - name: queue-master
             maven_dir: services/queue-master
-            resource_override: docker/queue-master/resource-override
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,18 +59,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '8'
-
-      - name: Apply pom.xml override
-        if: matrix.pom_override != ''
-        run: cp ${{ matrix.pom_override }} ${{ matrix.maven_dir }}/pom.xml
-
-      - name: Apply source overrides
-        if: matrix.src_override != ''
-        run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
-
-      - name: Apply resource overrides
-        if: matrix.resource_override != ''
-        run: cp -rv ${{ matrix.resource_override }}/. ${{ matrix.maven_dir }}/src/main/resources/
 
       - name: mvn test
         run: mvn -f ${{ matrix.maven_dir }}/pom.xml test
@@ -94,7 +76,6 @@ jobs:
           - name: front-end
             context: services/front-end
             dockerfile: services/front-end/Dockerfile
-            overlay: docker/front-end/src-override
           - name: catalogue
             context: services/catalogue
             dockerfile: services/catalogue/docker/catalogue/Dockerfile
@@ -107,8 +88,6 @@ jobs:
             maven_dir: services/carts
             dockerfile: docker/carts/Dockerfile
             build_tool: maven
-            pom_override: docker/carts/pom.xml
-            src_override: docker/carts/src-override
           - name: orders
             # context is .../target, not the repo root: orders' Dockerfile does
             # "COPY *.jar" (not "./target/*.jar"), expecting the jar directly
@@ -123,8 +102,6 @@ jobs:
             maven_dir: services/shipping
             dockerfile: services/shipping/docker/shipping/Dockerfile
             build_tool: maven
-            src_override: docker/shipping/src-override
-            resource_override: docker/shipping/resource-override
           - name: payment
             context: services/payment
             dockerfile: services/payment/docker/payment/Dockerfile
@@ -137,7 +114,6 @@ jobs:
             maven_dir: services/queue-master
             dockerfile: docker/queue-master/Dockerfile
             build_tool: maven
-            resource_override: docker/queue-master/resource-override
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -159,33 +135,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '8'
-
-      - name: Apply pom.xml override
-        if: matrix.pom_override != ''
-        # carts' real pom.xml lives in a read-only submodule we can't push
-        # fixes to, so the corrected copy lives in our own repo instead and
-        # gets spliced in here before the Maven build runs.
-        run: cp ${{ matrix.pom_override }} ${{ matrix.maven_dir }}/pom.xml
-
-      - name: Apply source overrides
-        if: matrix.src_override != ''
-        # Same idea as the pom.xml override, for individual .java files that
-        # needed fixing but live in a read-only submodule.
-        run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
-
-      - name: Apply resource overrides
-        if: matrix.resource_override != ''
-        # Same idea, for application.properties -- covers the actuator
-        # hardening for shipping/queue-master.
-        run: cp -rv ${{ matrix.resource_override }}/. ${{ matrix.maven_dir }}/src/main/resources/
-
-      - name: Apply file overlay
-        if: matrix.overlay != ''
-        # Generic version of the same idea for non-Java services: copies
-        # fixed files straight onto the submodule root, preserving relative
-        # paths (e.g. docker/front-end/src-override/api/orders/index.js ->
-        # services/front-end/api/orders/index.js).
-        run: cp -rv ${{ matrix.overlay }}/. ${{ matrix.context }}/
 
       - name: Build jar with Maven
         if: matrix.build_tool == 'maven'

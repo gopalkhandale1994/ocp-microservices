@@ -14,7 +14,7 @@ available on the free Sandbox tier — see [Known limitations](#known-limitation
 | front-end | Node.js | yes | public entrypoint, has the Route |
 | catalogue | Go | yes | real `/health` endpoint |
 | catalogue-db | MySQL 5.7 (custom seed) | yes | seeded via `dump.sql` |
-| carts | Java/Spring Boot 2.0.4 | yes | patched (see below) |
+| carts | Java/Spring Boot 2.0.4 | yes | app source unmodified, has a known startup bug -- see [Known limitations](#known-limitations) |
 | carts-db | `bitnami/mongodb:latest` | no | stock image |
 | orders | Java/Spring Boot 1.4.4 | yes | |
 | orders-db | `bitnami/mongodb:latest` | no | stock image |
@@ -22,7 +22,7 @@ available on the free Sandbox tier — see [Known limitations](#known-limitation
 | payment | Go | yes | real `/health` endpoint |
 | user | Go | yes | real `/health` endpoint |
 | user-db | `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8` | no | pinned old version, see below |
-| queue-master | Java/Spring Boot 1.4.0 | yes | patched (see below) |
+| queue-master | Java/Spring Boot 1.4.0 | yes | |
 | rabbitmq | `rabbitmq:3.9-management` | no | stock image |
 | session-db | `redis:alpine` | no | stock image |
 
@@ -34,11 +34,10 @@ GitHub org — their real upstream source, unmodified where possible.
 ## Repo layout
 
 ```
-services/          git submodules (upstream app source, read-only)
-docker/            Dockerfile/pom.xml/source overrides for the services
-                   whose submodule content needed a real fix (see below) --
-                   these get spliced into the build by CI, since we can't
-                   push changes into a submodule's own upstream repo
+services/          git submodules (upstream app source, read-only, unmodified)
+docker/            our own Dockerfiles for services whose submodule doesn't
+                   ship a working one (carts, queue-master) -- Dockerfiles
+                   only, never a patch to the app source itself
 k8s/<service>/     Deployment + Service (+ Route for front-end) per component
 test/              e2e test scripts + the manifest validator, all runnable
                    locally or as CI pipeline stages (see Testing, below)
@@ -108,9 +107,9 @@ git push origin v0.1.0
    under `k8s/` (valid YAML, has `apiVersion`/`kind`/`metadata.name`). Pure
    static check, no cluster credentials touched.
 2. **unit-test** — runs the real `mvn test` suite for the four Java
-   services (`carts`, `orders`, `shipping`, `queue-master`), applying the
-   same pom/source overrides the build stage uses. A real test failure
-   blocks the pipeline here, before anything gets built.
+   services (`carts`, `orders`, `shipping`, `queue-master`), as vendored,
+   no patches applied. A real test failure blocks the pipeline here,
+   before anything gets built.
 3. **build-and-push** — matrix build over all 9 custom images, tagged
    `ghcr.io/<owner>/ocp-microservices-<name>:<version>` (stripped from the
    git tag) and pushed to GHCR. Bump the version in both the git tag and
@@ -182,73 +181,57 @@ failure was a real bug, not a config typo — worth knowing about in advance:
    doesn't exist inside the Docker build context — git hard-fails on *any*
    command when it finds a broken gitlink (not when there's no `.git` at
    all). Fix: `rm -f <context>/.git` before building.
-5. **Real Spring Boot 2.0 incompatibility** (`carts`): the upstream pom pins
-   `spring-cloud-starter-zipkin:1.1.0.RELEASE` (pre-Boot-2.0) alongside
-   `spring-boot-starter-parent:2.0.4.RELEASE` — a `NoSuchMethodError` on
-   `SpringApplicationBuilder`. Worse: `io.prometheus:simpleclient_spring_boot`
-   depends on `AbstractEndpoint`, a class Spring Boot 2.0 deleted entirely as
-   part of its actuator rewrite — no dependency version fixes that, since
-   the class is just gone. Both were removed; a plain `io.prometheus:simpleclient`
-   Histogram (used directly in `HTTPMonitoringInterceptor`) still works fine.
-6. **`JpaHelper` NoSuchBeanDefinitionException** (`carts`): this Mongo-backed
-   app autowires a JPA-specific Spring Data REST bean as required, which
-   isn't guaranteed to exist with today's dependency resolution. Made it
-   `@Autowired(required = false)`.
-7. **JVM heap sizing**: the old JDK8 builds here predate reliable
+5. **JVM heap sizing**: the old JDK8 builds here predate reliable
    cgroup-aware default heap sizing — without an explicit `-Xmx`, they were
    sizing off the *node's* total memory rather than the container's limit,
    getting OOMKilled well under whatever limit was set. Fix: explicit
    `-Xmx`/`JAVA_OPTS` on every JVM service.
-8. **Dead `setcap` step** (`queue-master`): the original Dockerfile grants
+6. **Dead `setcap` step** (`queue-master`): the original Dockerfile grants
    `cap_net_bind_service` so java can bind port 80 as non-root. We moved to
    port 8080 instead (no privileged-port issue), but OpenShift's
    `no_new_privs` enforcement actively blocks *executing* a binary that
    carries a leftover file capability — had to remove the step entirely,
    not just stop relying on it.
-9. **`mongo` (any tag) blocked**: this specific Sandbox cluster transparently
+7. **`mongo` (any tag) blocked**: this specific Sandbox cluster transparently
    rewrites all `docker.io/library/mongo` pulls through an internal mirror
    that 403s ("bad credentials") — confirmed identical failure across
    several tags, not fixable from inside the namespace. `bitnami/mongodb`
    isn't subject to that rewrite.
-10. **Mongo driver/server version gap** (`user`): `user`'s ~2017-era Go
-    `mgo` driver can't handshake with MongoDB 8.x (bitnami's `:latest`,
-    since bitnami's free tier no longer publishes *any* older version tag).
-    Fixed by switching just `user-db` to
-    `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`, a real official
-    image with actual pinned old versions available.
-11. **`anyuid` SCC can't be granted**: a Sandbox namespace-admin can't grant
-    an SCC they don't hold themselves (standard RBAC escalation
-    prevention) — so a `RoleBinding` to `anyuid` always fails here. Turned
-    out to be unnecessary anyway: all the stock datastore images ran fine
-    under the default restricted SCC. Where a volume genuinely needs to be
-    writable under an arbitrary UID (`user-db`'s `/data/db`), the fix is an
-    `emptyDir` volume + omitting `fsGroup` (let OpenShift auto-assign one
-    from the namespace's allowed range — a hardcoded value gets rejected).
-12. **Probe timing**: these old Spring Boot apps have genuinely slow cold
+8. **Mongo driver/server version gap** (`user`): `user`'s ~2017-era Go
+   `mgo` driver can't handshake with MongoDB 8.x (bitnami's `:latest`,
+   since bitnami's free tier no longer publishes *any* older version tag).
+   Fixed by switching just `user-db` to
+   `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`, a real official
+   image with actual pinned old versions available.
+9. **`anyuid` SCC can't be granted**: a Sandbox namespace-admin can't grant
+   an SCC they don't hold themselves (standard RBAC escalation
+   prevention) — so a `RoleBinding` to `anyuid` always fails here. Turned
+   out to be unnecessary anyway: all the stock datastore images ran fine
+   under the default restricted SCC. Where a volume genuinely needs to be
+   writable under an arbitrary UID (`user-db`'s `/data/db`), the fix is an
+   `emptyDir` volume + omitting `fsGroup` (let OpenShift auto-assign one
+   from the namespace's allowed range — a hardcoded value gets rejected).
+10. **Probe timing**: these old Spring Boot apps have genuinely slow cold
     starts (one bean-init step alone logged 53 seconds) — default/short
     `initialDelaySeconds` values kill them mid-boot in an endless crash
     loop that has nothing to do with the app itself. `orders`/`shipping`
     ended up needing 100s readiness / 180s liveness delays.
-13. **Same Mongo driver/version gap, different service** (`orders`): all 14
+11. **Same Mongo driver/version gap, different service** (`orders`): all 14
     pods reporting healthy and TCP-reachable did *not* mean writes worked —
     `orders-db` (also `bitnami/mongodb:latest`) rejected every insert from
     `orders` with `Unsupported OP_QUERY command: insert` (code 352).
     `orders` runs 2016-era Spring Boot 1.4.4, whose Mongo driver still
     issues legacy `OP_QUERY` opcodes that MongoDB removed entirely in 5.1+;
     `carts` (Spring Boot 2.0.4, a modern driver) was never affected — this
-    only surfaced once `test/e2e-order-flow.sh` actually exercised a write,
+    only surfaced once a full order-flow test actually exercised a write,
     not just a connection. Same fix as `user-db`: switched to
     `quay.io/mongodb/mongodb-community-server:4.4.29-ubi8`.
-14. **A single bad response could crash all of front-end**: `POST /orders`
-    checked `body.status_code === 500` on the raw response *string*, before
-    `JSON.parse` — always false (strings don't have that property), so it
-    was dead code. Any error response from `user` (no `_links` field at
-    all) fell through to `jsonBody._links.customer.href` and threw an
-    uncaught `TypeError`, which crashes the entire Node process — no
-    per-request isolation, so one bad request took down front-end for every
-    user. Sibling handlers in the same file (`/card`, `/address`) already
-    guarded this correctly; this one didn't. Fixed via a source overlay
-    (`docker/front-end/src-override`) that parses first, then checks.
+
+None of the above touch application source — they're all Dockerfile, JVM
+flags, image choice, or k8s config. This project deliberately does not
+patch the vendored app code itself, even where a real bug is known (see
+[Known limitations](#known-limitations)): the goal is to redeploy the
+real upstream app as-is, bugs included, not to publish a patched fork.
 
 ## Known limitations
 
@@ -279,12 +262,36 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   image (pre-loaded with sample users) isn't in any of the 8 vendored
   repos — it lived in a separate, unlisted one. Register test users through
   the app instead of expecting demo accounts.
+- **`carts` may fail to boot: real upstream bugs, deliberately not patched.**
+  The vendored pom pins `spring-cloud-starter-zipkin:1.1.0.RELEASE`
+  (pre-Boot-2.0) alongside `spring-boot-starter-parent:2.0.4.RELEASE`,
+  which throws `NoSuchMethodError` on `SpringApplicationBuilder`; separately,
+  `io.prometheus:simpleclient_spring_boot` depends on `AbstractEndpoint`, a
+  class Spring Boot 2.0 deleted entirely as part of its actuator rewrite.
+  It also autowires a JPA-specific Spring Data REST bean (`JpaHelper`) as
+  required, in a Mongo-backed app where nothing guarantees that bean
+  exists. All three are real, upstream bugs in the vendored `pom.xml`/Java
+  source — not something this project's `docker/carts/Dockerfile` (build
+  process only) can fix without editing app code, which this project
+  intentionally doesn't do. Debugging and fixing this is left as the
+  exercise.
+- **`front-end` can crash on a specific bad response.** `POST /orders`
+  checks `body.status_code === 500` on the raw response *string*, before
+  `JSON.parse` — always false (strings don't have that property). If
+  `user` ever returns an error body with no `_links` field, the code falls
+  through to `jsonBody._links.customer.href` and throws an uncaught
+  `TypeError`, which crashes the whole Node process for every user, not
+  just the one request. Same reasoning as above: a real bug in vendored
+  `services/front-end/api/orders/index.js`, deliberately left unpatched.
 
 ## Security notes (read before reusing any of this elsewhere)
 
 - **Licensing**: all 8 vendored services (`services/*`) are Apache License
   2.0 — permissive, safe for internal use/modification. LICENSE files are
-  intact in each submodule; don't strip them if you copy code out.
+  intact in each submodule and this project doesn't touch app source at
+  all (see [Repo layout](#repo-layout)), so there's nothing to carry
+  "changed" notices for; don't strip the LICENSE files if you copy code
+  out yourself.
 - **This is a practice deployment, not a production template.** A few
   things here are *intentionally* insecure because they only ever run
   inside a private, single-user Sandbox namespace with no real user data:
@@ -331,32 +338,19 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   None of this was introduced by the OpenShift/CI work in this repo — it's
   what a real static scan finds in an 8-10 year old demo app once you
   point one at it. Treat the Security tab as the live source of truth;
-  this bullet is a snapshot, not a promise it stays accurate.
-  - **Fixed** (v0.6.1, via the `docker/*/resource-override` and
-    `src-override` mechanism, since the real source lives in read-only
-    submodules): actuators disabled entirely on `shipping` and
-    `queue-master` (`endpoints.enabled=false` — Spring Boot 1.4.x exposes
-    `/env`, `/dump`, `/trace` etc. unauthenticated with no
-    spring-security on the classpath, and neither service uses actuator
-    at runtime); the reflected-XSS path variable in `ShippingController`
-    is now HTML-escaped; `front-end`'s session cookie now sets
-    `sameSite: 'lax'` (mitigates the CSRF gap without needing HTTPS,
-    which the current port-forward/edge-route setup doesn't have
-    end-to-end) and reads its signing secret from `SESSION_SECRET` with
-    the old literal as a fallback.
-  - **Checked and NOT a real bug**: all 12 "critical" SSRF findings. Every
-    one of them is `request.get(endpoints.someUrl + '/' + userInput)` —
-    the host and protocol are always a fixed internal service URL from
-    config, never attacker-controlled; only the path suffix is. That's
-    not SSRF (an attacker who fully controlled the URL could redirect the
-    request anywhere; controlling a path segment on a fixed host can't).
-  - **Left as-is, documented, not worth the effort here**: the weak
-    SHA-1 password hash in `user/api/service.go` (already covered by the
-    "intentionally weak demo credentials" note above — a real fix means
-    a bcrypt migration, out of scope for a vendored demo with no real
-    user data) and the ~30 findings inside `jquery.flexslider.js` (an
-    unmaintained third-party plugin bundled by the original project, not
-    something to patch line-by-line).
+  this bullet is a snapshot, not a promise it stays accurate. **All of it
+  is left open, on purpose**: this project's policy is to redeploy the
+  vendored app as-is and never patch its source (see
+  [Repo layout](#repo-layout) and [Known limitations](#known-limitations))
+  — even where a fix would be trivial (the `shipping` XSS, the exposed
+  actuators), so the scan reflects the real upstream app, not a patched
+  fork. The one exception worth calling out explicitly: all 12
+  "critical" SSRF findings are false positives, not just unpatched —
+  every one is `request.get(endpoints.someUrl + '/' + userInput)`, where
+  the host/protocol is always a fixed internal service URL from config
+  and only the path suffix is request-influenced. That's not SSRF (an
+  attacker who fully controlled the URL could redirect the request
+  anywhere; controlling a path segment on a fixed host can't).
 - **Automated image scan (Trivy)**: `.github/workflows/image-scan.yml`
   pulls each of the 9 images actually pushed to GHCR (tag read straight out
   of `k8s/<service>/deployment.yaml`) and scans OS packages + language
