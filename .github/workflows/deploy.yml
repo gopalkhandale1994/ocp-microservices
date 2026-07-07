@@ -45,7 +45,16 @@ jobs:
           namespace: ${{ vars.OC_NAMESPACE }}
 
       - name: Apply manifests
-        run: oc apply -R -f k8s/ -n ${{ vars.OC_NAMESPACE }}
+        # k8s/rbac/ is deliberately excluded: it defines github-ci's own
+        # Role/RoleBinding, and github-ci (least-privilege by design) can't
+        # get/patch Role or RoleBinding objects -- including its own. That's
+        # applied once by a cluster-admin, not on every deploy.
+        run: |
+          for d in k8s/*/; do
+            name=$(basename "$d")
+            [ "$name" = "rbac" ] && continue
+            oc apply -R -f "$d" -n ${{ vars.OC_NAMESPACE }}
+          done
 
       - name: Wait for rollouts
         run: |
