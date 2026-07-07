@@ -257,13 +257,24 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   cluster-scoped operators or CRDs themselves. Deploys are via plain
   `oc apply`. Revisit this on a cluster where you have (or can get)
   cluster-admin, e.g. OpenShift Local (CRC).
-- **Public Route returns 503**: confirmed via a from-scratch nginx
-  pod+service+route test that this is a cluster-wide router issue on this
-  specific Sandbox instance, not anything in this project's config — every
-  layer we can inspect (Service, Endpoint, Pod, Route admission,
-  NetworkPolicy) is correct, and the app works perfectly when called from
-  inside the cluster. Not fixable from a namespace-scoped user; retry later
-  or check Red Hat's Sandbox status.
+- **Public Route returns 503**: not this project's config — every layer we
+  can inspect (Service, EndpointSlice, Pod, Route admission, NetworkPolicy)
+  is correct, and the app works perfectly when called from inside the
+  cluster (that's exactly what the e2e tests do, which is why they aren't
+  affected). Confirmed via a from-scratch nginx pod+service+route test that
+  hits the identical 503 — re-confirmed days later, same result. The more
+  precise finding: the platform's own console route (same router, same
+  `apps.` domain) works fine, so it's not the whole router down — it's
+  specific to tenant-created routes on this cluster shard, likely an
+  `IngressController` namespace/route selector that isn't picking up tenant
+  namespaces correctly. Not something a namespace-scoped user can inspect
+  or fix (`IngressController` objects live in `openshift-ingress-operator`).
+  Rather than chase a platform bug, view the app in a browser via
+  port-forward instead:
+  ```bash
+  oc port-forward svc/front-end 8080:80 -n <namespace>
+  # then open http://localhost:8080
+  ```
 - **`user-db` has no seed data**: the original demo's `weaveworksdemos/user-db`
   image (pre-loaded with sample users) isn't in any of the 8 vendored
   repos — it lived in a separate, unlisted one. Register test users through
