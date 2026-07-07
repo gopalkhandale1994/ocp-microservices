@@ -279,3 +279,34 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   image (pre-loaded with sample users) isn't in any of the 8 vendored
   repos — it lived in a separate, unlisted one. Register test users through
   the app instead of expecting demo accounts.
+
+## Security notes (read before reusing any of this elsewhere)
+
+- **Licensing**: all 8 vendored services (`services/*`) are Apache License
+  2.0 — permissive, safe for internal use/modification. LICENSE files are
+  intact in each submodule; don't strip them if you copy code out.
+- **This is a practice deployment, not a production template.** A few
+  things here are *intentionally* insecure because they only ever run
+  inside a private, single-user Sandbox namespace with no real user data:
+  `catalogue-db`'s `MYSQL_ROOT_PASSWORD=fake_password` and
+  `carts-db`'s `ALLOW_EMPTY_PASSWORD=yes` are both literally what they say —
+  don't carry either pattern into anything that isn't a disposable
+  practice cluster.
+- **Dependency age**: the vendored services run 8-10 year old framework
+  versions (Spring Boot 1.4.x/2.0.4, Node 10-era front-end deps, pre-Go-modules
+  Go). These almost certainly have known CVEs in their dependency chains —
+  that's *why* rebuilding this today surfaced so many real bugs (see the
+  numbered list above). GitHub Dependabot alerts are enabled on this repo,
+  so check the Security tab before assuming anything here is current.
+- **No malicious code found.** Checked for remote-download-and-execute
+  patterns, unexpected outbound network calls, and obfuscated/eval-based
+  code across the vendored source — nothing outside well-known vendored
+  front-end libraries (jQuery, etc.) and one dead-code path worth knowing
+  about: `queue-master`'s `DockerSpawner.java` can spawn arbitrary Docker
+  containers via the Docker API, but its only caller has those calls
+  commented out (confirmed dead, not reachable in normal operation).
+- **CI credentials are least-privilege**: `github-ci` (used by
+  `deploy.yml`) is bound to a custom `Role` (`k8s/rbac/ci-deployer-role.yaml`)
+  scoped to exactly the resources the pipeline touches — not OpenShift's
+  built-in `edit` role, which would also grant it read/write on every
+  Secret in the namespace.
