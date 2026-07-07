@@ -20,6 +20,20 @@ spec:
           # host as "session-db" for its express-session store.
           image: redis:alpine
           imagePullPolicy: IfNotPresent
+          # This image's default /data dir isn't writable under OpenShift's
+          # arbitrary UID (same class of issue as the Mongo/MySQL images).
+          # Redis's response to one failed RDB snapshot is to block ALL
+          # writes ("MISCONF ... stop-writes-on-bgsave-error"), which was
+          # silently breaking every session write (login, cart, etc.) --
+          # the app kept responding 200/201 regardless, since the session
+          # save happens after the response is already sent. Since this
+          # instance only holds ephemeral session data, disable RDB
+          # snapshotting entirely instead of fighting the permission: no
+          # disk writes needed, no volume needed either.
+          command:
+            - redis-server
+            - --save
+            - ""
           ports:
             - containerPort: 6379
           readinessProbe:

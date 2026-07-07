@@ -24,7 +24,7 @@ oc cp "$SCRIPT_DIR/order_flow_test.py" "$NAMESPACE/$RUNNER:/tmp/order_flow_test.
 
 echo
 echo "== Running register -> login -> cart -> order flow against front-end =="
-OUTPUT=$(oc exec "$RUNNER" -n "$NAMESPACE" -- python3 /tmp/order_flow_test.py 2>&1)
+OUTPUT=$(oc exec "$RUNNER" -n "$NAMESPACE" -- env NAMESPACE="$NAMESPACE" python3 /tmp/order_flow_test.py 2>&1)
 FLOW_STATUS=$?
 echo "$OUTPUT"
 

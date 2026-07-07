@@ -11,13 +11,22 @@ the caller can go verify the same data directly in orders-db/user-db.
 import base64
 import http.cookiejar
 import json
+import os
 import random
 import string
 import sys
 import urllib.error
 import urllib.request
 
-BASE = "http://front-end"
+# Deliberately NOT the short Service name "front-end": Python's
+# http.cookiejar silently rewrites single-label hostnames (no dot) to
+# "<host>.local" internally (an RFC 2965 "local domain" heuristic), then
+# fails to match that against the plain hostname on the *next* request --
+# so cookies never get sent back and every request after the first starts
+# a brand-new anonymous session. Using the fully-qualified in-cluster DNS
+# name (which has dots) sidesteps the quirk entirely.
+NAMESPACE = os.environ.get("NAMESPACE", "gopalskhandale1994-dev")
+BASE = f"http://front-end.{NAMESPACE}.svc.cluster.local"
 TIMEOUT = 10
 
 cj = http.cookiejar.CookieJar()
