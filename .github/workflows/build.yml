@@ -51,8 +51,11 @@ jobs:
             maven_dir: services/orders
           - name: shipping
             maven_dir: services/shipping
+            src_override: docker/shipping/src-override
+            resource_override: docker/shipping/resource-override
           - name: queue-master
             maven_dir: services/queue-master
+            resource_override: docker/queue-master/resource-override
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,6 +73,10 @@ jobs:
       - name: Apply source overrides
         if: matrix.src_override != ''
         run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
+
+      - name: Apply resource overrides
+        if: matrix.resource_override != ''
+        run: cp -rv ${{ matrix.resource_override }}/. ${{ matrix.maven_dir }}/src/main/resources/
 
       - name: mvn test
         run: mvn -f ${{ matrix.maven_dir }}/pom.xml test
@@ -116,6 +123,8 @@ jobs:
             maven_dir: services/shipping
             dockerfile: services/shipping/docker/shipping/Dockerfile
             build_tool: maven
+            src_override: docker/shipping/src-override
+            resource_override: docker/shipping/resource-override
           - name: payment
             context: services/payment
             dockerfile: services/payment/docker/payment/Dockerfile
@@ -128,6 +137,7 @@ jobs:
             maven_dir: services/queue-master
             dockerfile: docker/queue-master/Dockerfile
             build_tool: maven
+            resource_override: docker/queue-master/resource-override
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -162,6 +172,12 @@ jobs:
         # Same idea as the pom.xml override, for individual .java files that
         # needed fixing but live in a read-only submodule.
         run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
+
+      - name: Apply resource overrides
+        if: matrix.resource_override != ''
+        # Same idea, for application.properties -- covers the actuator
+        # hardening for shipping/queue-master.
+        run: cp -rv ${{ matrix.resource_override }}/. ${{ matrix.maven_dir }}/src/main/resources/
 
       - name: Apply file overlay
         if: matrix.overlay != ''
