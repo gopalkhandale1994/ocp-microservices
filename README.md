@@ -310,3 +310,25 @@ failure was a real bug, not a config typo — worth knowing about in advance:
   scoped to exactly the resources the pipeline touches — not OpenShift's
   built-in `edit` role, which would also grant it read/write on every
   Secret in the namespace.
+- **Automated SAST scan (CodeQL)**: `.github/workflows/codeql.yml` runs
+  GitHub's CodeQL scanner across JS, Go, and Java on every push to `main`
+  and weekly — results live in the repo's Security tab, not just this file.
+  First run found 50 alerts, effectively all inside the vendored 2016-era
+  demo app itself, not in anything written for this deployment:
+  - **Critical**: 12 SSRF findings in `front-end`'s `api/user`, `api/cart`,
+    and `helpers/index.js` — internal calls to other services built from
+    request data without validating the target.
+  - **High**: reflected XSS in `shipping`'s `ShippingController.java`, weak
+    password hashing in `user/api/service.go`, no CSRF middleware on
+    `front-end/server.js`'s session cookie, clear-text logging of session
+    data in `public/js/client.js`, and a DOM-XSS bug in the vendored
+    `jquery.flexslider.js` library.
+  - **Medium**: Spring Boot actuators left exposed in `shipping`'s and
+    `queue-master`'s `pom.xml`, an open redirect in `front-end/helpers/index.js`,
+    session cookie sent without `Secure`, plus ~20 more findings inside
+    `jquery.flexslider.js` (an unmaintained third-party plugin, not
+    project code).
+  None of this was introduced by the OpenShift/CI work in this repo — it's
+  what a real static scan finds in an 8-10 year old demo app once you
+  point one at it. Treat the Security tab as the live source of truth;
+  this bullet is a snapshot, not a promise it stays accurate.
