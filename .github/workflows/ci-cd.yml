@@ -208,6 +208,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install oc CLI
+        uses: redhat-actions/oc-installer@v1
+        with:
+          oc_version: '4.15'
+
       - name: Log in to OpenShift
         uses: redhat-actions/oc-login@v1
         with:
@@ -235,6 +240,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install oc CLI
+        uses: redhat-actions/oc-installer@v1
+        with:
+          oc_version: '4.15'
 
       - name: Log in to OpenShift
         uses: redhat-actions/oc-login@v1
