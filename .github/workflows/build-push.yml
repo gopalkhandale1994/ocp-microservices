@@ -24,6 +24,7 @@ jobs:
           - name: front-end
             context: services/front-end
             dockerfile: services/front-end/Dockerfile
+            overlay: docker/front-end/src-override
           - name: catalogue
             context: services/catalogue
             dockerfile: services/catalogue/docker/catalogue/Dockerfile
@@ -98,6 +99,14 @@ jobs:
         # Same idea as the pom.xml override, for individual .java files that
         # needed fixing but live in a read-only submodule.
         run: cp -rv ${{ matrix.src_override }}/. ${{ matrix.maven_dir }}/src/main/java/
+
+      - name: Apply file overlay
+        if: matrix.overlay != ''
+        # Generic version of the same idea for non-Java services: copies
+        # fixed files straight onto the submodule root, preserving relative
+        # paths (e.g. docker/front-end/src-override/api/orders/index.js ->
+        # services/front-end/api/orders/index.js).
+        run: cp -rv ${{ matrix.overlay }}/. ${{ matrix.context }}/
 
       - name: Build jar with Maven
         if: matrix.build_tool == 'maven'

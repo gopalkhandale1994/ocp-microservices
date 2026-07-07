@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: queue-master
-          image: ghcr.io/gopalkhandale1994/ocp-microservices-queue-master:0.5.0
+          image: ghcr.io/gopalkhandale1994/ocp-microservices-queue-master:0.6.0
           imagePullPolicy: IfNotPresent
           # Image's own ENTRYPOINT binds port 80 and relies on a build-time
           # setcap grant to do it as non-root -- OpenShift's restricted SCC
