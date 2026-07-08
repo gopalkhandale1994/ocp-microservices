@@ -83,7 +83,13 @@ git push origin v0.1.0
 This triggers **Build** (`unit-test` → `build-and-push` → `trivy-scan`),
 which pushes all 9 images to
 `ghcr.io/<owner>/ocp-microservices-<name>:0.1.0`. **Deploy** then runs
-automatically, applying `k8s/` and waiting for every rollout.
+automatically, applying `k8s/` and waiting for every rollout --
+*but only if you're pushing to your repo's default branch*. GitHub only
+auto-fires a `workflow_run`-triggered workflow using the copy of it that
+lives on the default branch, regardless of which branch actually built.
+Working on another branch: either set it as the repo's default, or after
+Build finishes, trigger Deploy yourself (Actions tab → Deploy → Run
+workflow).
 
 To change versions later, bump the tag *and* every
 `k8s/*/deployment.yaml` image reference together (manual semver, not
